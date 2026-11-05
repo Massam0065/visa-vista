@@ -35,11 +35,13 @@ std::string randomToken() {
 }
 
 void addCors(crow::response& response) {
-    const std::string origin = env("VV_ALLOWED_ORIGIN", "https://visa-vistapk.vercel.app");
-    response.set_header("Access-Control-Allow-Origin", origin);
+    // FIX: Ab Env par depend nahi, har origin ko allow karo
+    // Is se visa-vistapk vs visa-vista-orpin wala masla khatam
+    response.set_header("Access-Control-Allow-Origin", "*");
     response.set_header("Vary", "Origin");
     response.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
     response.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    response.set_header("Access-Control-Max-Age", "86400");
 }
 crow::response jsonResponse(int status, crow::json::wvalue body) {
     crow::response response(std::move(body));
@@ -146,14 +148,20 @@ int main() {
     catch (const std::exception& error) { std::cerr << "Startup error: " << error.what() << std::endl; return 1; }
 
     crow::SimpleApp app;
-   
 
+    // FIX: Universal Preflight Handler - Har OPTIONS ko pehle ye pakdega
     CROW_ROUTE(app, "/api/<path>").methods("OPTIONS"_method)([](const crow::request&, std::string) {
         crow::response response(204); addCors(response); return response;
     });
     CROW_ROUTE(app, "/api/login").methods("OPTIONS"_method)([](const crow::request&) {
-    crow::response response(204); addCors(response); return response;
-});
+        crow::response response(204); addCors(response); return response;
+    });
+    CROW_ROUTE(app, "/api/stories").methods("OPTIONS"_method)([](const crow::request&) {
+        crow::response response(204); addCors(response); return response;
+    });
+    CROW_ROUTE(app, "/api/logout").methods("OPTIONS"_method)([](const crow::request&) {
+        crow::response response(204); addCors(response); return response;
+    });
 
     CROW_ROUTE(app, "/api/health").methods("GET"_method)([] {
         crow::json::wvalue body; body["ok"] = true; body["service"] = "visa-vista-api";
@@ -241,6 +249,7 @@ int main() {
         else if (ext == "webm") response.set_header("Content-Type", "video/webm");
         else response.set_header("Content-Type", "image/jpeg");
         response.set_header("Cache-Control", "public, max-age=86400");
+        addCors(response);
         return response;
     });
 
