@@ -90,11 +90,22 @@ bool authorized(const crow::request& request) {
     if (header.rfind("Bearer ", 0) == 0) {
         supplied = header.substr(7);
     }
-    // Crow me ?token= url me nahi, url_params me hota hai - is liye yahan se lo
+    // Naya tareeqa - URL se token nikalna (url_params use nahi kar rahe taake compile error na aaye)
     if (supplied.empty()) {
-        const char* q = request.url_params.get("token");
-        if (q) supplied = q;
+        std::string url = request.url;
+        auto pos = url.find("token=");
+        if (pos != std::string::npos) {
+            supplied = url.substr(pos + 6);
+            auto amp = supplied.find('&');
+            if (amp != std::string::npos) supplied = supplied.substr(0, amp);
+            auto amp2 = supplied.find(' ');
+            if (amp2 != std::string::npos) supplied = supplied.substr(0, amp2);
+        }
     }
+    if (supplied.empty()) return false;
+    std::lock_guard<std::mutex> lock(sessionMutex);
+    return std::find(sessions.begin(), sessions.end(), supplied) != sessions.end();
+}
     if (supplied.empty()) return false;
     std::lock_guard<std::mutex> lock(sessionMutex);
     return std::find(sessions.begin(), sessions.end(), supplied) != sessions.end();
