@@ -146,7 +146,7 @@ int main() {
     catch (const std::exception& error) { std::cerr << "Startup error: " << error.what() << std::endl; return 1; }
 
     crow::SimpleApp app;
-    app.max_payload(16 * 1024 * 1024);
+   
 
     CROW_ROUTE(app, "/api/<path>").methods("OPTIONS"_method)([](const crow::request&, std::string) {
         crow::response response(204); addCors(response); return response;
