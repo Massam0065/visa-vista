@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: visa-vista-api
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: VV_ADMIN_PASSWORD
+        sync: false
+      - key: VV_ALLOWED_ORIGIN
+        value: https://visa-vistapk.vercel.app
+      - key: VV_DATA_DIR
+        value: /var/data
+    disk:
+      name: visa-vista-data
+      mountPath: /var/data
+      sizeGB: 1
