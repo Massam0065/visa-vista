@@ -151,6 +151,9 @@ int main() {
     CROW_ROUTE(app, "/api/<path>").methods("OPTIONS"_method)([](const crow::request&, std::string) {
         crow::response response(204); addCors(response); return response;
     });
+    CROW_ROUTE(app, "/api/login").methods("OPTIONS"_method)([](const crow::request&) {
+    crow::response response(204); addCors(response); return response;
+});
 
     CROW_ROUTE(app, "/api/health").methods("GET"_method)([] {
         crow::json::wvalue body; body["ok"] = true; body["service"] = "visa-vista-api";
