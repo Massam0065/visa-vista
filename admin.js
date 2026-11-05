@@ -1,7 +1,6 @@
 (()=>{const $=id=>document.getElementById(id),base=(window.VV_API_BASE||'').replace(/\/$/,'' );let token='';
-// FIX: Ab koi Authorization header nahi, koi application/json nahi - sirf text/plain
-// Is se browser OPTIONS bhejega hi nahi, CORS error khatam
-const headers=()=>({'Content-Type':'text/plain'});
+// FIX: Token dono jagah bhejo - Header + ?token= - taake purana ya naya server dono chal jaye
+const headers=()=>({'Content-Type':'text/plain','Authorization':'Bearer '+token});
 const msg=t=>$('status').textContent=t;
 async function api(path,opts={}){const r=await fetch(base+path,opts);if(!r.ok)throw Error(await r.text()||('HTTP '+r.status));return r.status===204?null:r.json().catch(()=>null)}
 function fileData(f){return new Promise((resolve,reject)=>{if(!f)return resolve('');const rd=new FileReader();rd.onload=()=>resolve(rd.result);rd.onerror=reject;rd.readAsDataURL(f)})}
