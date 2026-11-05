@@ -1,290 +1,248 @@
 #include "crow.h"
-#include <sqlite3.h>
-#include <filesystem>
-#include <fstream>
-#include <sstream>
-#include <cstdlib>
 #include <string>
 #include <vector>
 #include <mutex>
-#include <random>
+#include <fstream>
+#include <sstream>
 #include <algorithm>
-#include <cctype>
-#include <iostream>
-#include <stdexcept>
-#include <utility>
+#include <cstdlib>
 
-namespace fs = std::filesystem;
-namespace {
 std::mutex sessionMutex;
 std::vector<std::string> sessions;
 
-std::string env(const char* key, const char* fallback = "") {
-    const char* value = std::getenv(key);
-    return value && *value ? value : fallback;
-}
-std::string dataDir() { return env("VV_DATA_DIR", "./data"); }
-std::string mediaDir() { return dataDir() + "/uploads"; }
+std::string DATA_FILE = "stories.json";
 
-std::string randomToken() {
-    std::random_device rd;
-    static constexpr char hex[] = "0123456789abcdef";
-    std::string out(64, '0');
-    for (char& c : out) c = hex[rd() % 16];
-    return out;
+// ---------- Helper: Load stories file ----------
+std::string load_file() {
+    std::ifstream in(DATA_FILE);
+    if (!in) return "{\"stories\":[]}";
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::string s = ss.str();
+    if (s.empty()) return "{\"stories\":[]}";
+    return s;
 }
 
-void addCors(crow::response& response) {
-    // FIX: Ab Env par depend nahi, har origin ko allow karo
-    // Is se visa-vistapk vs visa-vista-orpin wala masla khatam
-    response.set_header("Access-Control-Allow-Origin", "*");
-    response.set_header("Vary", "Origin");
-    response.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-    response.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-    response.set_header("Access-Control-Max-Age", "86400");
-}
-crow::response jsonResponse(int status, crow::json::wvalue body) {
-    crow::response response(std::move(body));
-    response.code = status;
-    response.set_header("Content-Type", "application/json; charset=utf-8");
-    addCors(response);
-    return response;
-}
-crow::response textResponse(int status, const std::string& body) {
-    crow::response response(status, body);
-    addCors(response);
-    return response;
+void save_file(const std::string& content) {
+    std::ofstream out(DATA_FILE);
+    out << content;
 }
 
-sqlite3* openDb() {
-    sqlite3* database = nullptr;
-    const std::string path = dataDir() + "/visa_vista.db";
-    if (sqlite3_open(path.c_str(), &database) != SQLITE_OK) {
-        if (database) sqlite3_close(database);
-        return nullptr;
-    }
-    sqlite3_busy_timeout(database, 5000);
-    return database;
-}
-void initialize() {
-    fs::create_directories(mediaDir());
-    sqlite3* database = openDb();
-    if (!database) throw std::runtime_error("Could not open SQLite database. Check VV_DATA_DIR permissions.");
-    const char* sql = "CREATE TABLE IF NOT EXISTS stories ("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL DEFAULT '',"
-        "category TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '',"
-        "date TEXT NOT NULL DEFAULT '', story TEXT NOT NULL DEFAULT '',"
-        "image TEXT NOT NULL DEFAULT '', video TEXT NOT NULL DEFAULT '',"
-        "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);";
-    char* error = nullptr;
-    const int result = sqlite3_exec(database, sql, nullptr, nullptr, &error);
-    std::string message = error ? error : "database initialization failed";
-    sqlite3_free(error);
-    sqlite3_close(database);
-    if (result != SQLITE_OK) throw std::runtime_error(message);
-}
-
+// ---------- FIXED authorized - Bracket ka masla khatam ----------
 bool authorized(const crow::request& request) {
-    std::string supplied;
-    const std::string header = request.get_header_value("Authorization");
-    if (header.rfind("Bearer ", 0) == 0) {
+    std::string supplied = "";
+    std::string header = request.get_header_value("Authorization");
+    if (header.size() > 7 && header.rfind("Bearer ", 0) == 0) {
         supplied = header.substr(7);
     }
-    // Naya tareeqa - URL se token nikalna (url_params use nahi kar rahe taake compile error na aaye)
+    // 1. ?token= se - url_params se (Crow ka sahi tareeqa)
+    if (supplied.empty()) {
+        const char* q = request.url_params.get("token");
+        if (q) supplied = std::string(q);
+    }
+    // 2. Agar url_params me na mile to URL string se
     if (supplied.empty()) {
         std::string url = request.url;
-        auto pos = url.find("token=");
+        size_t pos = url.find("token=");
         if (pos != std::string::npos) {
             supplied = url.substr(pos + 6);
-            auto amp = supplied.find('&');
+            size_t amp = supplied.find('&');
             if (amp != std::string::npos) supplied = supplied.substr(0, amp);
-            auto amp2 = supplied.find(' ');
-            if (amp2 != std::string::npos) supplied = supplied.substr(0, amp2);
         }
     }
     if (supplied.empty()) return false;
     std::lock_guard<std::mutex> lock(sessionMutex);
-    return std::find(sessions.begin(), sessions.end(), supplied) != sessions.end();
-}
-    if (supplied.empty()) return false;
-    std::lock_guard<std::mutex> lock(sessionMutex);
-    return std::find(sessions.begin(), sessions.end(), supplied) != sessions.end();
-}
-}
-std::string base64Decode(const std::string& input) {
-    static const std::string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::string output;
-    int value = 0, bits = -8;
-    for (unsigned char ch : input) {
-        if (ch == '=') break;
-        const auto pos = alphabet.find(ch);
-        if (pos == std::string::npos) continue;
-        value = (value << 6) + static_cast<int>(pos);
-        bits += 6;
-        if (bits >= 0) { output.push_back(static_cast<char>((value >> bits) & 0xff)); bits -= 8; }
+    for (auto &s : sessions) {
+        if (s == supplied) return true;
     }
-    return output;
-}
-std::string saveDataUrl(const std::string& dataUrl, bool isVideo) {
-    const auto comma = dataUrl.find(',');
-    if (comma == std::string::npos || dataUrl.substr(0, comma).find(";base64") == std::string::npos) return "";
-    const std::string header = dataUrl.substr(0, comma);
-    std::string extension;
-    if (isVideo) extension = header.find("webm") != std::string::npos ? "webm" : "mp4";
-    else if (header.find("png") != std::string::npos) extension = "png";
-    else if (header.find("webp") != std::string::npos) extension = "webp";
-    else if (header.find("jpeg") != std::string::npos || header.find("jpg") != std::string::npos) extension = "jpg";
-    else return "";
-
-    const std::string bytes = base64Decode(dataUrl.substr(comma + 1));
-    const size_t limit = isVideo ? 10u * 1024u * 1024u : 8u * 1024u * 1024u;
-    if (bytes.empty() || bytes.size() > limit) return "";
-    const std::string filename = randomToken() + "." + extension;
-    std::ofstream file(mediaDir() + "/" + filename, std::ios::binary);
-    if (!file) return "";
-    file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-    if (!file.good()) return "";
-    return "/uploads/" + filename;
+    return false;
 }
 
-crow::json::wvalue storyFromRow(sqlite3_stmt* statement) {
-    crow::json::wvalue row;
-    row["id"] = sqlite3_column_int(statement, 0);
-    const char* keys[] = {"title", "category", "country", "date", "story", "image", "video", "created_at"};
-    for (int i = 0; i < 8; ++i) {
-        const auto* value = sqlite3_column_text(statement, i + 1);
-        row[keys[i]] = value ? reinterpret_cast<const char*>(value) : "";
-    }
-    return row;
+std::string make_token() {
+    static int counter = 0;
+    counter++;
+    return "vv-" + std::to_string(std::rand()) + "-" + std::to_string(counter) + "-" + std::to_string(time(nullptr));
 }
-std::string stringField(const crow::json::rvalue& json, const char* key) {
-    if (!json.has(key) || json[key].t() != crow::json::type::String) return "";
-    return json[key].s();
+
+void add_cors(crow::response& res) {
+    res.set_header("Access-Control-Allow-Origin", "*");
+    res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
 }
-} // namespace
 
 int main() {
-    try { initialize(); }
-    catch (const std::exception& error) { std::cerr << "Startup error: " << error.what() << std::endl; return 1; }
-
     crow::SimpleApp app;
 
-    // FIX: Universal Preflight Handler - Har OPTIONS ko pehle ye pakdega
-    CROW_ROUTE(app, "/api/<path>").methods("OPTIONS"_method)([](const crow::request&, std::string) {
-        crow::response response(204); addCors(response); return response;
-    });
-    CROW_ROUTE(app, "/api/login").methods("OPTIONS"_method)([](const crow::request&) {
-        crow::response response(204); addCors(response); return response;
-    });
-    CROW_ROUTE(app, "/api/stories").methods("OPTIONS"_method)([](const crow::request&) {
-        crow::response response(204); addCors(response); return response;
-    });
-    CROW_ROUTE(app, "/api/logout").methods("OPTIONS"_method)([](const crow::request&) {
-        crow::response response(204); addCors(response); return response;
+    // ---------- CORS Preflight ----------
+    CROW_ROUTE(app, "/api/<path>")
+    .methods("OPTIONS"_method)
+    ([](const crow::request& req, std::string path) {
+        crow::response res(204);
+        add_cors(res);
+        return res;
     });
 
-    CROW_ROUTE(app, "/api/health").methods("GET"_method)([] {
-        crow::json::wvalue body; body["ok"] = true; body["service"] = "visa-vista-api";
-        return jsonResponse(200, body);
+    // ---------- GET Stories - Public ----------
+    CROW_ROUTE(app, "/api/stories")
+    .methods("GET"_method)
+    ([](const crow::request& req) {
+        crow::response res(load_file());
+        res.set_header("Content-Type", "application/json");
+        add_cors(res);
+        return res;
     });
 
-    CROW_ROUTE(app, "/api/login").methods("POST"_method)([](const crow::request& request) {
-        const auto json = crow::json::load(request.body);
-        if (!json || !json.has("password")) return textResponse(400, "Invalid login request");
-        const std::string expected = env("VV_ADMIN_PASSWORD");
-        if (expected.empty()) return textResponse(503, "Admin password is not configured on the server");
-        if (stringField(json, "password") != expected) return textResponse(401, "Incorrect password");
-        const std::string session = randomToken();
-        { std::lock_guard<std::mutex> lock(sessionMutex); sessions.push_back(session); }
-        crow::json::wvalue body; body["token"] = session;
-        return jsonResponse(200, body);
-    });
-
-    CROW_ROUTE(app, "/api/stories").methods("GET"_method)([] {
-        sqlite3* database = openDb();
-        if (!database) return textResponse(500, "Database unavailable");
-        sqlite3_stmt* statement = nullptr;
-        const char* sql = "SELECT id,title,category,country,date,story,image,video,created_at FROM stories ORDER BY id DESC";
-        if (sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) != SQLITE_OK) {
-            sqlite3_close(database); return textResponse(500, "Could not read stories");
+    // ---------- LOGIN ----------
+    CROW_ROUTE(app, "/api/login")
+    .methods("POST"_method)
+    ([](const crow::request& req) {
+        crow::response res;
+        add_cors(res);
+        res.set_header("Content-Type", "application/json");
+        try {
+            auto body = crow::json::load(req.body);
+            if (!body) { res.code = 400; res.body = "{\"error\":\"bad json\"}"; return res; }
+            std::string pass = body["password"].s();
+            const char* env_pass = std::getenv("ADMIN_PASSWORD");
+            std::string correct = env_pass ? env_pass : "admin123";
+            if (pass != correct) { res.code = 401; res.body = "{\"error\":\"wrong password\"}"; return res; }
+            std::string token = make_token();
+            {
+                std::lock_guard<std::mutex> lock(sessionMutex);
+                sessions.push_back(token);
+            }
+            crow::json::wvalue out;
+            out["token"] = token;
+            res.code = 200;
+            res.body = out.dump();
+            return res;
+        } catch (...) {
+            res.code = 500; res.body = "{\"error\":\"server error\"}"; return res;
         }
-        crow::json::wvalue::list stories;
-        while (sqlite3_step(statement) == SQLITE_ROW) stories.push_back(storyFromRow(statement));
-        sqlite3_finalize(statement); sqlite3_close(database);
-        crow::json::wvalue body; body["stories"] = std::move(stories);
-        return jsonResponse(200, body);
     });
 
-    CROW_ROUTE(app, "/api/stories").methods("POST"_method)([](const crow::request& request) {
-        if (!authorized(request)) return textResponse(401, "Please log in again");
-        const auto json = crow::json::load(request.body);
-        if (!json) return textResponse(400, "Invalid story data");
-        std::string imageData = stringField(json, "image");
-        std::string videoData = stringField(json, "video");
-        if (imageData.size() > 12 * 1024 * 1024 || videoData.size() > 14 * 1024 * 1024)
-            return textResponse(413, "File is too large. Use an image up to 8 MB or video up to 10 MB.");
-        std::string imagePath, videoPath;
-        if (!imageData.empty()) { imagePath = saveDataUrl(imageData, false); if (imagePath.empty()) return textResponse(400, "Unsupported image or image upload failed"); }
-        if (!videoData.empty()) { videoPath = saveDataUrl(videoData, true); if (videoPath.empty()) return textResponse(400, "Unsupported video or video upload failed"); }
-
-        sqlite3* database = openDb();
-        if (!database) return textResponse(500, "Database unavailable");
-        sqlite3_stmt* statement = nullptr;
-        const char* sql = "INSERT INTO stories(title,category,country,date,story,image,video) VALUES(?,?,?,?,?,?,?)";
-        if (sqlite3_prepare_v2(database, sql, -1, &statement, nullptr) != SQLITE_OK) {
-            sqlite3_close(database); return textResponse(500, "Could not prepare story save");
-        }
-        const std::string fields[] = {stringField(json,"title"), stringField(json,"category"), stringField(json,"country"), stringField(json,"date"), stringField(json,"story"), imagePath, videoPath};
-        for (int i = 0; i < 7; ++i) sqlite3_bind_text(statement, i + 1, fields[i].c_str(), -1, SQLITE_TRANSIENT);
-        const bool saved = sqlite3_step(statement) == SQLITE_DONE;
-        sqlite3_finalize(statement); sqlite3_close(database);
-        return textResponse(saved ? 201 : 500, saved ? "Published" : "Could not save story");
-    });
-
-    CROW_ROUTE(app, "/api/stories/<int>").methods("DELETE"_method)([](const crow::request& request, int id) {
-        if (!authorized(request)) return textResponse(401, "Please log in again");
-        sqlite3* database = openDb();
-        if (!database) return textResponse(500, "Database unavailable");
-        sqlite3_stmt* statement = nullptr;
-        if (sqlite3_prepare_v2(database, "DELETE FROM stories WHERE id=?", -1, &statement, nullptr) != SQLITE_OK) {
-            sqlite3_close(database); return textResponse(500, "Could not delete story");
-        }
-        sqlite3_bind_int(statement, 1, id);
-        const bool deleted = sqlite3_step(statement) == SQLITE_DONE;
-        sqlite3_finalize(statement); sqlite3_close(database);
-        return textResponse(deleted ? 200 : 500, deleted ? "Deleted" : "Delete failed");
-    });
-
-    CROW_ROUTE(app, "/uploads/<string>").methods("GET"_method)([](const crow::request&, std::string name) {
-        if (name.find("..") != std::string::npos || name.find('/') != std::string::npos || name.find('\\') != std::string::npos)
-            return crow::response(403);
-        std::ifstream file(mediaDir() + "/" + name, std::ios::binary);
-        if (!file) return crow::response(404);
-        std::ostringstream content; content << file.rdbuf();
-        crow::response response(content.str());
-        const auto dot = name.rfind('.'); const std::string ext = dot == std::string::npos ? "" : name.substr(dot + 1);
-        if (ext == "png") response.set_header("Content-Type", "image/png");
-        else if (ext == "webp") response.set_header("Content-Type", "image/webp");
-        else if (ext == "mp4") response.set_header("Content-Type", "video/mp4");
-        else if (ext == "webm") response.set_header("Content-Type", "video/webm");
-        else response.set_header("Content-Type", "image/jpeg");
-        response.set_header("Cache-Control", "public, max-age=86400");
-        addCors(response);
-        return response;
-    });
-
-    CROW_ROUTE(app, "/api/logout").methods("POST"_method)([](const crow::request& request) {
-        const std::string header = request.get_header_value("Authorization");
-        if (header.rfind("Bearer ", 0) == 0) {
+    // ---------- LOGOUT ----------
+    CROW_ROUTE(app, "/api/logout")
+    .methods("POST"_method)
+    ([](const crow::request& req) {
+        crow::response res;
+        add_cors(res);
+        res.set_header("Content-Type", "application/json");
+        if (!authorized(req)) { res.code = 401; res.body = "{\"error\":\"login again\"}"; return res; }
+        std::string supplied = "";
+        const char* q = req.url_params.get("token");
+        if (q) supplied = std::string(q);
+        {
             std::lock_guard<std::mutex> lock(sessionMutex);
-            const std::string session = header.substr(7);
-            sessions.erase(std::remove(sessions.begin(), sessions.end(), session), sessions.end());
+            sessions.erase(std::remove(sessions.begin(), sessions.end(), supplied), sessions.end());
         }
-        return textResponse(200, "Logged out");
+        res.code = 200; res.body = "{\"ok\":true}"; return res;
     });
 
-    const char* portValue = std::getenv("PORT");
-    const int port = portValue ? std::stoi(portValue) : 8080;
-    app.bindaddr("0.0.0.0").port(port).multithreaded().run();
+    // ---------- POST Story ----------
+    CROW_ROUTE(app, "/api/stories")
+    .methods("POST"_method)
+    ([](const crow::request& req) {
+        crow::response res;
+        add_cors(res);
+        res.set_header("Content-Type", "application/json");
+        if (!authorized(req)) { res.code = 401; res.body = "{\"error\":\"Please log in again\"}"; return res; }
+        try {
+            auto body = crow::json::load(req.body);
+            if (!body) { res.code = 400; res.body = "{\"error\":\"bad json\"}"; return res; }
+            auto data = crow::json::load(load_file());
+            crow::json::wvalue stories_val;
+            // Purani stories copy karo
+            std::vector<crow::json::rvalue> old_list;
+            if (data.has("stories")) {
+                for (auto& s : data["stories"]) {
+                    old_list.push_back(std::move(s));
+                }
+            }
+            // Nayi story banao
+            crow::json::wvalue nw;
+            nw["id"] = std::to_string(time(nullptr)) + "-" + std::to_string(std::rand());
+            nw["title"] = body.has("title") ? std::string(body["title"].s()) : "";
+            nw["category"] = body.has("category") ? std::string(body["category"].s()) : "";
+            nw["country"] = body.has("country") ? std::string(body["country"].s()) : "";
+            nw["date"] = body.has("date") ? std::string(body["date"].s()) : "";
+            nw["story"] = body.has("story") ? std::string(body["story"].s()) : "";
+            nw["image"] = body.has("image") ? std::string(body["image"].s()) : "";
+            nw["video"] = body.has("video") ? std::string(body["video"].s()) : "";
+
+            crow::json::wvalue out;
+            crow::json::wvalue::list new_list;
+            new_list.push_back(std::move(nw));
+            // Purani stories ko wvalue me convert karo
+            auto old_json = crow::json::load(load_file());
+            if (old_json.has("stories")) {
+                for (size_t i = 0; i < old_json["stories"].size(); i++) {
+                    crow::json::wvalue item;
+                    item["id"] = std::string(old_json["stories"][i]["id"].s());
+                    item["title"] = std::string(old_json["stories"][i]["title"].s());
+                    item["category"] = old_json["stories"][i].has("category") ? std::string(old_json["stories"][i]["category"].s()) : "";
+                    item["country"] = old_json["stories"][i].has("country") ? std::string(old_json["stories"][i]["country"].s()) : "";
+                    item["date"] = old_json["stories"][i].has("date") ? std::string(old_json["stories"][i]["date"].s()) : "";
+                    item["story"] = old_json["stories"][i].has("story") ? std::string(old_json["stories"][i]["story"].s()) : "";
+                    item["image"] = old_json["stories"][i].has("image") ? std::string(old_json["stories"][i]["image"].s()) : "";
+                    item["video"] = old_json["stories"][i].has("video") ? std::string(old_json["stories"][i]["video"].s()) : "";
+                    new_list.push_back(std::move(item));
+                }
+            }
+            out["stories"] = std::move(new_list);
+            save_file(out.dump());
+            res.code = 200; res.body = "{\"ok\":true}"; return res;
+        } catch (std::exception& e) {
+            res.code = 500; res.body = "{\"error\":\"server error\"}"; return res;
+        }
+    });
+
+    // ---------- DELETE Story ----------
+    CROW_ROUTE(app, "/api/stories/<string>")
+    .methods("DELETE"_method)
+    ([](const crow::request& req, std::string id) {
+        crow::response res;
+        add_cors(res);
+        res.set_header("Content-Type", "application/json");
+        if (!authorized(req)) { res.code = 401; res.body = "{\"error\":\"Please log in again\"}"; return res; }
+        try {
+            auto old_json = crow::json::load(load_file());
+            crow::json::wvalue out;
+            crow::json::wvalue::list new_list;
+            if (old_json.has("stories")) {
+                for (size_t i = 0; i < old_json["stories"].size(); i++) {
+                    std::string cur_id = old_json["stories"][i].has("id") ? std::string(old_json["stories"][i]["id"].s()) : "";
+                    if (cur_id == id) continue;
+                    crow::json::wvalue item;
+                    item["id"] = cur_id;
+                    item["title"] = std::string(old_json["stories"][i]["title"].s());
+                    item["category"] = old_json["stories"][i].has("category") ? std::string(old_json["stories"][i]["category"].s()) : "";
+                    item["country"] = old_json["stories"][i].has("country") ? std::string(old_json["stories"][i]["country"].s()) : "";
+                    item["date"] = old_json["stories"][i].has("date") ? std::string(old_json["stories"][i]["date"].s()) : "";
+                    item["story"] = old_json["stories"][i].has("story") ? std::string(old_json["stories"][i]["story"].s()) : "";
+                    item["image"] = old_json["stories"][i].has("image") ? std::string(old_json["stories"][i]["image"].s()) : "";
+                    item["video"] = old_json["stories"][i].has("video") ? std::string(old_json["stories"][i]["video"].s()) : "";
+                    new_list.push_back(std::move(item));
+                }
+            }
+            out["stories"] = std::move(new_list);
+            save_file(out.dump());
+            res.code = 200; res.body = "{\"ok\":true}"; return res;
+        } catch (...) {
+            res.code = 500; res.body = "{\"error\":\"server error\"}"; return res;
+        }
+    });
+
+    // ---------- Health ----------
+    CROW_ROUTE(app, "/")
+    ([](const crow::request& req) {
+        crow::response res("Visa Vista API Running");
+        add_cors(res);
+        return res;
+    });
+
+    const char* port_env = std::getenv("PORT");
+    int port = port_env ? std::atoi(port_env) : 18080;
+    app.port(port).multithreaded().run();
     return 0;
 }
