@@ -85,11 +85,20 @@ void initialize() {
 }
 
 bool authorized(const crow::request& request) {
+    std::string supplied;
     const std::string header = request.get_header_value("Authorization");
-    if (header.rfind("Bearer ", 0) != 0) return false;
-    const std::string supplied = header.substr(7);
+    if (header.rfind("Bearer ", 0) == 0) {
+        supplied = header.substr(7);
+    }
+    // Crow me ?token= url me nahi, url_params me hota hai - is liye yahan se lo
+    if (supplied.empty()) {
+        const char* q = request.url_params.get("token");
+        if (q) supplied = q;
+    }
+    if (supplied.empty()) return false;
     std::lock_guard<std::mutex> lock(sessionMutex);
     return std::find(sessions.begin(), sessions.end(), supplied) != sessions.end();
+}
 }
 std::string base64Decode(const std::string& input) {
     static const std::string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
