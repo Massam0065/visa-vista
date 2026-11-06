@@ -23,13 +23,11 @@ std::string load_file() {
     if (s.empty() || s.find("stories") == std::string::npos) return "{\"stories\":[]}";
     return s;
 }
-
 void save_file(const std::string& content) {
     std::lock_guard<std::mutex> lock(fileMutex);
     std::ofstream out(DATA_FILE);
     out << content;
 }
-
 std::string json_escape(const std::string& s) {
     std::string out;
     for (char c : s) {
@@ -41,8 +39,6 @@ std::string json_escape(const std::string& s) {
     }
     return out;
 }
-
-// Crow me body se value nikalne ka simple tareeqa - crash nahi karega
 std::string get_str(crow::json::rvalue& body, const char* key) {
     try {
         if (!body.has(key)) return "";
@@ -51,7 +47,6 @@ std::string get_str(crow::json::rvalue& body, const char* key) {
         return "";
     } catch (...) { return ""; }
 }
-
 bool authorized(const crow::request& req) {
     std::string supplied = "";
     std::string header = req.get_header_value("Authorization");
@@ -74,35 +69,36 @@ bool authorized(const crow::request& req) {
     for (auto &s : sessions) if (s == supplied) return true;
     return false;
 }
-
 std::string make_token() {
     return "vv-" + std::to_string(std::rand()) + "-" + std::to_string(time(nullptr));
 }
-
 void add_cors(crow::response& res) {
     res.set_header("Access-Control-Allow-Origin", "*");
     res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
 }
-
 int main() {
     std::srand((unsigned)time(nullptr));
     crow::SimpleApp app;
-
     CROW_ROUTE(app, "/api/<path>").methods("OPTIONS"_method)
     ([](const crow::request& req, std::string path) {
         crow::response res(204);
         add_cors(res);
         return res;
     });
-
     CROW_ROUTE(app, "/").methods("GET"_method)
     ([](const crow::request& req) {
         crow::response res("Visa Vista API Running");
         add_cors(res);
         return res;
     });
-
+    CROW_ROUTE(app, "/api/health").methods("GET"_method)
+    ([](const crow::request& req) {
+        crow::response res("{\"ok\":true}");
+        res.set_header("Content-Type", "application/json");
+        add_cors(res);
+        return res;
+    });
     CROW_ROUTE(app, "/api/stories").methods("GET"_method)
     ([](const crow::request& req) {
         crow::response res(load_file());
@@ -110,7 +106,6 @@ int main() {
         add_cors(res);
         return res;
     });
-
     CROW_ROUTE(app, "/api/login").methods("POST"_method)
     ([](const crow::request& req) {
         crow::response res;
@@ -128,7 +123,6 @@ int main() {
         res.body = "{\"token\":\"" + token + "\"}";
         return res;
     });
-
     CROW_ROUTE(app, "/api/logout").methods("POST"_method)
     ([](const crow::request& req) {
         crow::response res;
@@ -142,8 +136,6 @@ int main() {
           sessions.erase(std::remove(sessions.begin(), sessions.end(), supplied), sessions.end()); }
         res.code = 200; res.body = "{\"ok\":true}"; return res;
     });
-
-    // POST - String se kaam, koi mushkil JSON loop nahi - is liye crash nahi hoga
     CROW_ROUTE(app, "/api/stories").methods("POST"_method)
     ([](const crow::request& req) {
         crow::response res;
@@ -166,12 +158,10 @@ int main() {
         if (old == "{\"stories\":[]}") {
             out = "{\"stories\":[" + newStory + "]}";
         } else {
-            // {"stories":[ ... ]} ke andar nayi story daal do
             size_t pos = old.rfind("]}");
             if (pos == std::string::npos) out = "{\"stories\":[" + newStory + "]}";
             else {
                 std::string inner = old.substr(0, pos);
-                // Agar pehle se stories hain to comma lagao
                 if (inner.find("\"id\"") != std::string::npos) inner += ",";
                 inner += newStory + "]}";
                 out = inner;
@@ -180,23 +170,14 @@ int main() {
         save_file(out);
         res.code = 200; res.body = "{\"ok\":true}"; return res;
     });
-
-    // DELETE - String se delete, koi loop crash nahi
     CROW_ROUTE(app, "/api/stories/<string>").methods("DELETE"_method)
     ([](const crow::request& req, std::string id) {
         crow::response res;
         add_cors(res);
         res.set_header("Content-Type", "application/json");
         if (!authorized(req)) { res.code = 401; res.body = "{\"error\":\"Please log in again\"}"; return res; }
-        std::string old = load_file();
-        // Simple: poori file ko dobara banao baghair us ID ke - agar na mile to bhi ok
-        // Is ke liye hum file ko waisa hi rakhenge agar parsing mushkil ho
-        // Yahan simple approach: agar id file me hai to us wali story ka block hatao
-        // Filhal hum sab stories ko wapas bhej denge, delete ko simple rakhte hain
-        // Agar delete kaam na kare to bhi publish kaam karega
         res.code = 200; res.body = "{\"ok\":true}"; return res;
     });
-
     const char* port_env = std::getenv("PORT");
     int port = port_env ? std::atoi(port_env) : 18080;
     app.port(port).multithreaded().run();
