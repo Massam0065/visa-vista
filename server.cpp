@@ -17,16 +17,14 @@ std::string load_file() {
     std::lock_guard<std::mutex> lock(fileMutex);
     std::ifstream in(DATA_FILE);
     if (!in) return "{\"stories\":[]}";
-    std::stringstream ss;
-    ss << in.rdbuf();
+    std::stringstream ss; ss << in.rdbuf();
     std::string s = ss.str();
     if (s.empty() || s.find("stories") == std::string::npos) return "{\"stories\":[]}";
     return s;
 }
 void save_file(const std::string& content) {
     std::lock_guard<std::mutex> lock(fileMutex);
-    std::ofstream out(DATA_FILE);
-    out << content;
+    std::ofstream out(DATA_FILE); out << content;
 }
 std::string json_escape(const std::string& s) {
     std::string out;
@@ -55,131 +53,63 @@ bool authorized(const crow::request& req) {
         const char* q = req.url_params.get("token");
         if (q) supplied = std::string(q);
     }
-    if (supplied.empty()) {
-        std::string url = req.url;
-        size_t pos = url.find("token=");
-        if (pos != std::string::npos) {
-            supplied = url.substr(pos + 6);
-            size_t amp = supplied.find('&');
-            if (amp != std::string::npos) supplied = supplied.substr(0, amp);
-        }
-    }
     if (supplied.empty()) return false;
     std::lock_guard<std::mutex> lock(sessionMutex);
     for (auto &s : sessions) if (s == supplied) return true;
     return false;
 }
-std::string make_token() {
-    return "vv-" + std::to_string(std::rand()) + "-" + std::to_string(time(nullptr));
-}
+std::string make_token() { return "vv-" + std::to_string(std::rand()) + "-" + std::to_string(time(nullptr)); }
+
 void add_cors(crow::response& res) {
     res.set_header("Access-Control-Allow-Origin", "*");
     res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
 }
+
 int main() {
     std::srand((unsigned)time(nullptr));
     crow::SimpleApp app;
     CROW_ROUTE(app, "/api/<path>").methods("OPTIONS"_method)
-    ([](const crow::request& req, std::string path) {
-        crow::response res(204);
-        add_cors(res);
-        return res;
-    });
+    ([](const crow::request& req, std::string path) { crow::response res(204); add_cors(res); return res; });
     CROW_ROUTE(app, "/").methods("GET"_method)
-    ([](const crow::request& req) {
-        crow::response res("Visa Vista API Running");
-        add_cors(res);
-        return res;
-    });
+    ([](const crow::request& req) { crow::response res("Visa Vista API Running"); add_cors(res); return res; });
     CROW_ROUTE(app, "/api/health").methods("GET"_method)
-    ([](const crow::request& req) {
-        crow::response res("{\"ok\":true}");
-        res.set_header("Content-Type", "application/json");
-        add_cors(res);
-        return res;
-    });
+    ([](const crow::request& req) { crow::response res("{\"ok\":true}"); res.set_header("Content-Type","application/json"); add_cors(res); return res; });
     CROW_ROUTE(app, "/api/stories").methods("GET"_method)
-    ([](const crow::request& req) {
-        crow::response res(load_file());
-        res.set_header("Content-Type", "application/json");
-        add_cors(res);
-        return res;
-    });
+    ([](const crow::request& req) { crow::response res(load_file()); res.set_header("Content-Type","application/json"); add_cors(res); return res; });
     CROW_ROUTE(app, "/api/login").methods("POST"_method)
     ([](const crow::request& req) {
-        crow::response res;
-        add_cors(res);
-        res.set_header("Content-Type", "application/json");
+        crow::response res; add_cors(res); res.set_header("Content-Type","application/json");
         auto body = crow::json::load(req.body);
-        if (!body) { res.code = 400; res.body = "{\"error\":\"bad json\"}"; return res; }
+        if (!body) { res.code=400; res.body="{\"error\":\"bad json\"}"; return res; }
         std::string pass = get_str(body, "password");
         const char* env_pass = std::getenv("ADMIN_PASSWORD");
         std::string correct = env_pass ? env_pass : "admin123";
-        if (pass != correct) { res.code = 401; res.body = "{\"error\":\"wrong password\"}"; return res; }
+        if (pass != correct) { res.code=401; res.body="{\"error\":\"wrong password\"}"; return res; }
         std::string token = make_token();
         { std::lock_guard<std::mutex> lock(sessionMutex); sessions.push_back(token); }
-        res.code = 200;
-        res.body = "{\"token\":\"" + token + "\"}";
-        return res;
-    });
-    CROW_ROUTE(app, "/api/logout").methods("POST"_method)
-    ([](const crow::request& req) {
-        crow::response res;
-        add_cors(res);
-        res.set_header("Content-Type", "application/json");
-        if (!authorized(req)) { res.code = 401; res.body = "{\"error\":\"login again\"}"; return res; }
-        std::string supplied = "";
-        const char* q = req.url_params.get("token");
-        if (q) supplied = std::string(q);
-        { std::lock_guard<std::mutex> lock(sessionMutex);
-          sessions.erase(std::remove(sessions.begin(), sessions.end(), supplied), sessions.end()); }
-        res.code = 200; res.body = "{\"ok\":true}"; return res;
+        res.code=200; res.body="{\"token\":\""+token+"\"}"; return res;
     });
     CROW_ROUTE(app, "/api/stories").methods("POST"_method)
     ([](const crow::request& req) {
-        crow::response res;
-        add_cors(res);
-        res.set_header("Content-Type", "application/json");
-        if (!authorized(req)) { res.code = 401; res.body = "{\"error\":\"Please log in again\"}"; return res; }
+        crow::response res; add_cors(res); res.set_header("Content-Type","application/json");
+        if (!authorized(req)) { res.code=401; res.body="{\"error\":\"Please log in again\"}"; return res; }
         auto body = crow::json::load(req.body);
-        if (!body) { res.code = 400; res.body = "{\"error\":\"bad json\"}"; return res; }
+        if (!body) { res.code=400; res.body="{\"error\":\"bad json\"}"; return res; }
         std::string id = std::to_string(time(nullptr)) + "-" + std::to_string(std::rand());
-        std::string newStory = "{\"id\":\"" + id + "\","
-            "\"title\":\"" + json_escape(get_str(body, "title")) + "\","
-            "\"category\":\"" + json_escape(get_str(body, "category")) + "\","
-            "\"country\":\"" + json_escape(get_str(body, "country")) + "\","
-            "\"date\":\"" + json_escape(get_str(body, "date")) + "\","
-            "\"story\":\"" + json_escape(get_str(body, "story")) + "\","
-            "\"image\":\"" + json_escape(get_str(body, "image")) + "\","
-            "\"video\":\"" + json_escape(get_str(body, "video")) + "\"}";
-        std::string old = load_file();
-        std::string out;
-        if (old == "{\"stories\":[]}") {
-            out = "{\"stories\":[" + newStory + "]}";
-        } else {
-            size_t pos = old.rfind("]}");
-            if (pos == std::string::npos) out = "{\"stories\":[" + newStory + "]}";
-            else {
-                std::string inner = old.substr(0, pos);
-                if (inner.find("\"id\"") != std::string::npos) inner += ",";
-                inner += newStory + "]}";
-                out = inner;
-            }
-        }
-        save_file(out);
-        res.code = 200; res.body = "{\"ok\":true}"; return res;
+        std::string ns = "{\"id\":\""+id+"\",\"title\":\""+json_escape(get_str(body,"title"))+"\",\"category\":\""+json_escape(get_str(body,"category"))+"\",\"country\":\""+json_escape(get_str(body,"country"))+"\",\"date\":\""+json_escape(get_str(body,"date"))+"\",\"story\":\""+json_escape(get_str(body,"story"))+"\",\"image\":\""+json_escape(get_str(body,"image"))+"\",\"video\":\""+json_escape(get_str(body,"video"))+"\"}";
+        std::string old = load_file(); std::string out;
+        if (old=="{\"stories\":[]}") out="{\"stories\":["+ns+"]}";
+        else { size_t pos=old.rfind("]}"); if(pos==std::string::npos) out="{\"stories\":["+ns+"]}"; else { std::string inner=old.substr(0,pos); if(inner.find("\"id\"")!=std::string::npos) inner+=","; inner+=ns+"]}"; out=inner; } }
+        save_file(out); res.code=200; res.body="{\"ok\":true}"; return res;
     });
     CROW_ROUTE(app, "/api/stories/<string>").methods("DELETE"_method)
     ([](const crow::request& req, std::string id) {
-        crow::response res;
-        add_cors(res);
-        res.set_header("Content-Type", "application/json");
-        if (!authorized(req)) { res.code = 401; res.body = "{\"error\":\"Please log in again\"}"; return res; }
-        res.code = 200; res.body = "{\"ok\":true}"; return res;
+        crow::response res; add_cors(res); res.set_header("Content-Type","application/json");
+        if (!authorized(req)) { res.code=401; res.body="{\"error\":\"Please log in again\"}"; return res; }
+        res.code=200; res.body="{\"ok\":true}"; return res;
     });
     const char* port_env = std::getenv("PORT");
     int port = port_env ? std::atoi(port_env) : 18080;
-    app.port(port).multithreaded().run();
-    return 0;
+    app.port(port).multithreaded().run(); return 0;
 }
