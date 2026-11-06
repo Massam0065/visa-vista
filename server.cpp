@@ -13,9 +13,19 @@ std::vector<std::string> sessions;
 std::string DATA_FILE = "stories.json";
 std::mutex fileMutex;
 
+std::string get_data_file() {
+    const char* dir = std::getenv("VV_DATA_DIR");
+    if (dir && std::string(dir).size() > 0) {
+        std::string d = std::string(dir);
+        if (d.back() != '/' && d.back() != '\\') d += "/";
+        return d + "stories.json";
+    }
+    return "stories.json";
+}
+
 std::string load_file() {
     std::lock_guard<std::mutex> lock(fileMutex);
-    std::ifstream in(DATA_FILE);
+    std::ifstream in(get_data_file());
     if (!in) return "{\"stories\":[]}";
     std::stringstream ss; ss << in.rdbuf();
     std::string s = ss.str();
@@ -24,7 +34,7 @@ std::string load_file() {
 }
 void save_file(const std::string& content) {
     std::lock_guard<std::mutex> lock(fileMutex);
-    std::ofstream out(DATA_FILE); out << content;
+    std::ofstream out(get_data_file()); out << content;
 }
 std::string json_escape(const std::string& s) {
     std::string out;
@@ -61,7 +71,13 @@ bool authorized(const crow::request& req) {
 std::string make_token() { return "vv-" + std::to_string(std::rand()) + "-" + std::to_string(time(nullptr)); }
 
 void add_cors(crow::response& res) {
-    res.set_header("Access-Control-Allow-Origin", "*");
+    const char* origin = std::getenv("VV_ALLOWED_ORIGIN");
+    if (origin && std::string(origin).size() > 0) {
+        res.set_header("Access-Control-Allow-Origin", origin);
+    } else {
+        res.set_header("Access-Control-Allow-Origin", "*");
+    }
+    res.set_header("Vary", "Origin");
     res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
 }
@@ -83,8 +99,9 @@ int main() {
         auto body = crow::json::load(req.body);
         if (!body) { res.code=400; res.body="{\"error\":\"bad json\"}"; return res; }
         std::string pass = get_str(body, "password");
-        const char* env_pass = std::getenv("ADMIN_PASSWORD");
-        std::string correct = env_pass ? env_pass : "admin123";
+        const char* env_pass = std::getenv("VV_ADMIN_PASSWORD");
+        if (!env_pass) env_pass = std::getenv("ADMIN_PASSWORD");
+        std::string correct = (env_pass && std::string(env_pass).size() > 0) ? std::string(env_pass) : "admin123";
         if (pass != correct) { res.code=401; res.body="{\"error\":\"wrong password\"}"; return res; }
         std::string token = make_token();
         { std::lock_guard<std::mutex> lock(sessionMutex); sessions.push_back(token); }
