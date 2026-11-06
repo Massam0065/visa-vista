@@ -7,16 +7,17 @@
 #include <algorithm>
 #include <cstdlib>
 #include <ctime>
+#include <filesystem>
 
 std::mutex sessionMutex;
 std::vector<std::string> sessions;
-std::string DATA_FILE = "stories.json";
 std::mutex fileMutex;
 
 std::string get_data_file() {
     const char* dir = std::getenv("VV_DATA_DIR");
     if (dir && std::string(dir).size() > 0) {
         std::string d = std::string(dir);
+        try { std::filesystem::create_directories(d); } catch(...) {}
         if (d.back() != '/' && d.back() != '\\') d += "/";
         return d + "stories.json";
     }
@@ -34,16 +35,21 @@ std::string load_file() {
 }
 void save_file(const std::string& content) {
     std::lock_guard<std::mutex> lock(fileMutex);
-    std::ofstream out(get_data_file()); out << content;
+    std::string path = get_data_file();
+    std::ofstream out(path, std::ios::trunc | std::ios::binary);
+    out << content;
+    out.flush();
 }
 std::string json_escape(const std::string& s) {
     std::string out;
-    for (char c : s) {
+    for (unsigned char c : s) {
         if (c == '"') out += "\\\"";
         else if (c == '\\') out += "\\\\";
         else if (c == '\n') out += "\\n";
         else if (c == '\r') out += "\\r";
-        else out += c;
+        else if (c == '\t') out += "\\t";
+        else if (c < 0x20) { char buf[7]; snprintf(buf, sizeof(buf), "\\u%04x", c); out += buf; }
+        else out += (char)c;
     }
     return out;
 }
@@ -80,19 +86,25 @@ void add_cors(crow::response& res) {
     res.set_header("Vary", "Origin");
     res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.set_header("Access-Control-Max-Age", "86400");
 }
 
 int main() {
     std::srand((unsigned)time(nullptr));
     crow::SimpleApp app;
+
     CROW_ROUTE(app, "/api/<path>").methods("OPTIONS"_method)
     ([](const crow::request& req, std::string path) { crow::response res(204); add_cors(res); return res; });
+
     CROW_ROUTE(app, "/").methods("GET"_method)
     ([](const crow::request& req) { crow::response res("Visa Vista API Running"); add_cors(res); return res; });
+
     CROW_ROUTE(app, "/api/health").methods("GET"_method)
     ([](const crow::request& req) { crow::response res("{\"ok\":true}"); res.set_header("Content-Type","application/json"); add_cors(res); return res; });
+
     CROW_ROUTE(app, "/api/stories").methods("GET"_method)
     ([](const crow::request& req) { crow::response res(load_file()); res.set_header("Content-Type","application/json"); add_cors(res); return res; });
+
     CROW_ROUTE(app, "/api/login").methods("POST"_method)
     ([](const crow::request& req) {
         crow::response res; add_cors(res); res.set_header("Content-Type","application/json");
@@ -107,6 +119,7 @@ int main() {
         { std::lock_guard<std::mutex> lock(sessionMutex); sessions.push_back(token); }
         res.code=200; res.body="{\"token\":\""+token+"\"}"; return res;
     });
+
     CROW_ROUTE(app, "/api/stories").methods("POST"_method)
     ([](const crow::request& req) {
         crow::response res; add_cors(res); res.set_header("Content-Type","application/json");
@@ -114,18 +127,59 @@ int main() {
         auto body = crow::json::load(req.body);
         if (!body) { res.code=400; res.body="{\"error\":\"bad json\"}"; return res; }
         std::string id = std::to_string(time(nullptr)) + "-" + std::to_string(std::rand());
+        // image / video ko poora save karo, koi kat nahi
         std::string ns = "{\"id\":\""+id+"\",\"title\":\""+json_escape(get_str(body,"title"))+"\",\"category\":\""+json_escape(get_str(body,"category"))+"\",\"country\":\""+json_escape(get_str(body,"country"))+"\",\"date\":\""+json_escape(get_str(body,"date"))+"\",\"story\":\""+json_escape(get_str(body,"story"))+"\",\"image\":\""+json_escape(get_str(body,"image"))+"\",\"video\":\""+json_escape(get_str(body,"video"))+"\"}";
         std::string old = load_file(); std::string out;
         if (old=="{\"stories\":[]}") out="{\"stories\":["+ns+"]}";
-        else { size_t pos=old.rfind("]}"); if(pos==std::string::npos) out="{\"stories\":["+ns+"]}"; else { std::string inner=old.substr(0,pos); if(inner.find("\"id\"")!=std::string::npos) inner+=","; inner+=ns+"]}"; out=inner; } }
-        save_file(out); res.code=200; res.body="{\"ok\":true}"; return res;
+        else {
+            size_t pos=old.rfind("]}");
+            if(pos==std::string::npos) out="{\"stories\":["+ns+"]}";
+            else { std::string inner=old.substr(0,pos); if(inner.find("\"id\"")!=std::string::npos) inner+=","; inner+=ns+"]}"; out=inner; }
+        }
+        save_file(out); res.code=200; res.body="{\"ok\":true,\"id\":\""+id+"\"}"; return res;
     });
+
+    // ===== FIXED DELETE - Ab asal me delete hoga =====
     CROW_ROUTE(app, "/api/stories/<string>").methods("DELETE"_method)
     ([](const crow::request& req, std::string id) {
         crow::response res; add_cors(res); res.set_header("Content-Type","application/json");
         if (!authorized(req)) { res.code=401; res.body="{\"error\":\"Please log in again\"}"; return res; }
-        res.code=200; res.body="{\"ok\":true}"; return res;
+        // URL se id saaf karo - %20 wagera
+        std::string target = id;
+        // Agar id query me aaye to wahan se bhi lo
+        const char* qid = req.url_params.get("id");
+        if (qid && std::string(qid).size()>0) target = std::string(qid);
+
+        std::string old = load_file();
+        auto j = crow::json::load(old);
+        if (!j || !j.has("stories")) { res.code=200; res.body="{\"ok\":true}"; return res; }
+
+        std::string out = "{\"stories\":[";
+        bool first = true;
+        bool found = false;
+        for (auto &st : j["stories"]) {
+            std::string sid = "";
+            try { if (st.has("id") && st["id"].t()==crow::json::type::String) sid = std::string(st["id"].s()); } catch(...) {}
+            if (sid == target) { found = true; continue; } // is wali ko chor do = delete
+            if (!first) out += ",";
+            first = false;
+            // poori story wapis likho taake pic na toote
+            out += "{\"id\":\""+json_escape(sid)+"\"";
+            out += ",\"title\":\""+json_escape(get_str(st,"title"))+"\"";
+            out += ",\"category\":\""+json_escape(get_str(st,"category"))+"\"";
+            out += ",\"country\":\""+json_escape(get_str(st,"country"))+"\"";
+            out += ",\"date\":\""+json_escape(get_str(st,"date"))+"\"";
+            out += ",\"story\":\""+json_escape(get_str(st,"story"))+"\"";
+            out += ",\"image\":\""+json_escape(get_str(st,"image"))+"\"";
+            out += ",\"video\":\""+json_escape(get_str(st,"video"))+"\"}";
+        }
+        out += "]}";
+        save_file(out);
+        if (found) { res.code=200; res.body="{\"ok\":true,\"deleted\":true}"; }
+        else { res.code=200; res.body="{\"ok\":true,\"deleted\":false,\"msg\":\"id not found\"}"; }
+        return res;
     });
+
     const char* port_env = std::getenv("PORT");
     int port = port_env ? std::atoi(port_env) : 18080;
     app.port(port).multithreaded().run(); return 0;
