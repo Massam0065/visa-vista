@@ -23,6 +23,7 @@ std::string get_data_file() {
     }
     return "stories.json";
 }
+
 std::string load_file() {
     std::lock_guard<std::mutex> lock(fileMutex);
     std::ifstream in(get_data_file());
@@ -75,31 +76,48 @@ bool authorized(const crow::request& req) {
 }
 std::string make_token() { return "vv-" + std::to_string(std::rand()) + "-" + std::to_string(time(nullptr)); }
 
+void add_cors(crow::response& res, const crow::request& req) {
+    std::string origin = req.get_header_value("Origin");
+    if (origin.empty()) origin = "*";
+    res.set_header("Access-Control-Allow-Origin", origin);
+    res.set_header("Vary", "Origin");
+    res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.set_header("Access-Control-Max-Age", "86400");
+}
+void add_cors(crow::response& res) {
+    res.set_header("Access-Control-Allow-Origin", "*");
+    res.set_header("Vary", "Origin");
+    res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.set_header("Access-Control-Max-Age", "86400");
+}
+
 int main() {
     std::srand((unsigned)time(nullptr));
+    crow::SimpleApp app;
 
-    // ===== PAKKA CORS FIX - Crow ka apna handler =====
-    crow::CORSHandler cors;
-    cors.global()
-        .origin("*")
-        .methods("GET"_method, "POST"_method, "DELETE"_method, "OPTIONS"_method)
-        .headers("Content-Type", "Authorization")
-        .max_age(86400);
-
-    crow::App<crow::CORSHandler> app(cors);
+    CROW_ROUTE(app, "/api/login").methods("OPTIONS"_method)
+    ([](const crow::request& req) { crow::response res(204); add_cors(res, req); return res; });
+    CROW_ROUTE(app, "/api/stories").methods("OPTIONS"_method)
+    ([](const crow::request& req) { crow::response res(204); add_cors(res, req); return res; });
+    CROW_ROUTE(app, "/api/stories/<string>").methods("OPTIONS"_method)
+    ([](const crow::request& req, std::string id) { crow::response res(204); add_cors(res, req); return res; });
+    CROW_ROUTE(app, "/api/<path>").methods("OPTIONS"_method)
+    ([](const crow::request& req, std::string path) { crow::response res(204); add_cors(res, req); return res; });
 
     CROW_ROUTE(app, "/").methods("GET"_method)
-    ([](const crow::request& req) { return "Visa Vista API Running"; });
+    ([](const crow::request& req) { crow::response res("Visa Vista API Running"); add_cors(res, req); return res; });
 
     CROW_ROUTE(app, "/api/health").methods("GET"_method)
-    ([](const crow::request& req) { crow::response res("{\"ok\":true}"); res.set_header("Content-Type","application/json"); return res; });
+    ([](const crow::request& req) { crow::response res("{\"ok\":true}"); res.set_header("Content-Type","application/json"); add_cors(res, req); return res; });
 
     CROW_ROUTE(app, "/api/stories").methods("GET"_method)
-    ([](const crow::request& req) { crow::response res(load_file()); res.set_header("Content-Type","application/json"); return res; });
+    ([](const crow::request& req) { crow::response res(load_file()); res.set_header("Content-Type","application/json"); add_cors(res, req); return res; });
 
     CROW_ROUTE(app, "/api/login").methods("POST"_method)
     ([](const crow::request& req) {
-        crow::response res; res.set_header("Content-Type","application/json");
+        crow::response res; add_cors(res, req); res.set_header("Content-Type","application/json");
         auto body = crow::json::load(req.body);
         if (!body) { res.code=400; res.body="{\"error\":\"bad json\"}"; return res; }
         std::string pass = get_str(body, "password");
@@ -114,7 +132,7 @@ int main() {
 
     CROW_ROUTE(app, "/api/stories").methods("POST"_method)
     ([](const crow::request& req) {
-        crow::response res; res.set_header("Content-Type","application/json");
+        crow::response res; add_cors(res, req); res.set_header("Content-Type","application/json");
         if (!authorized(req)) { res.code=401; res.body="{\"error\":\"Please log in again\"}"; return res; }
         auto body = crow::json::load(req.body);
         if (!body) { res.code=400; res.body="{\"error\":\"bad json\"}"; return res; }
@@ -132,7 +150,7 @@ int main() {
 
     CROW_ROUTE(app, "/api/stories/<string>").methods("DELETE"_method)
     ([](const crow::request& req, std::string id) {
-        crow::response res; res.set_header("Content-Type","application/json");
+        crow::response res; add_cors(res, req); res.set_header("Content-Type","application/json");
         if (!authorized(req)) { res.code=401; res.body="{\"error\":\"Please log in again\"}"; return res; }
         std::string target = id;
         const char* qid = req.url_params.get("id");
