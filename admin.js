@@ -1,50 +1,166 @@
-(()=>{const $=id=>document.getElementById(id),base=(window.VV_API_BASE||'').replace(/\/$/,'' );let token='';const headers=()=>({'Content-Type':'application/json','Authorization':'Bearer '+token});const msg=t=>$('status').textContent=t;
-async function api(path,opts={}){const r=await fetch(base+path,opts);if(!r.ok)throw Error(await r.text()||('HTTP '+r.status));return r.status===204?null:r.json().catch(()=>null)}
+// ===== Visa Vista Admin - FINAL =====
+const API = "https://visa-vista-api-he8x.onrender.com";
 
-// Pic ko chota karo taake server par aasani se save ho aur jaldi dikhe
-function fileData(f){return new Promise((resolve,reject)=>{
-  if(!f) return resolve('');
-  // Agar video hai to direct base64
-  if(f.type.startsWith('video/')){ const rd=new FileReader(); rd.onload=()=>resolve(rd.result); rd.onerror=reject; rd.readAsDataURL(f); return; }
-  // Image ko compress karo - 1200px max
-  const img=new Image(); const url=URL.createObjectURL(f);
-  img.onload=()=>{
-    const canvas=document.createElement('canvas');
-    let w=img.width, h=img.height;
-    const max=1200;
-    if(w>max){ h=h*max/w; w=max; }
-    if(h>max){ w=w*max/h; h=max; }
-    canvas.width=w; canvas.height=h;
-    canvas.getContext('2d').drawImage(img,0,0,w,h);
-    URL.revokeObjectURL(url);
-    resolve(canvas.toDataURL('image/jpeg',0.82));
-  };
-  img.onerror=()=>{ URL.revokeObjectURL(url); const rd=new FileReader(); rd.onload=()=>resolve(rd.result); rd.onerror=reject; rd.readAsDataURL(f); };
-  img.src=url;
-})}
+let token = localStorage.getItem("vv_token") || "";
 
-async function load(){
-  const d=await api('/api/stories');
-  $('storyList').innerHTML=(d.stories||[]).map(s=>`
-    <div class="row" style="align-items:flex-start">
-      <div style="display:flex;gap:12px;align-items:flex-start">
-        ${s.image ? `<img src="${s.image}" style="width:90px;height:70px;object-fit:cover;border-radius:8px;border:1px solid #ddd" onerror="this.style.display='none'">` : `<div style="width:90px;height:70px;background:#eaf5fb;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:12px;color:#60758a">No Photo</div>`}
-        <div><b>${safe(s.title||'Untitled story')}</b><div class="muted">${safe([s.category,s.country].filter(Boolean).join(' · '))}</div><div class="muted" style="font-size:12px">${safe(s.date||'')}</div></div>
-      </div>
-      <button class="btn danger" data-id="${s.id}">Delete</button>
-    </div>`).join('')||'<p>No stories published yet.</p>';
-  document.querySelectorAll('[data-id]').forEach(b=>b.onclick=async()=>{
-    if(!confirm('Delete this story?'))return;
-    try{
-      const id = encodeURIComponent(b.dataset.id);
-      await api('/api/stories/'+id,{method:'DELETE',headers:headers()});
-      await load(); msg('Story deleted.');
-    }catch(e){ msg('Delete failed: '+e.message + ' - Dobara Login karke try karo.'); }
-  })
+// Agar pehle se login hai to dashboard dikhao
+function showDashboard(show) {
+  const loginBox = document.getElementById("loginBox") || document.getElementById("login-box") || document.getElementById("loginSection");
+  const dashBox = document.getElementById("dashboard") || document.getElementById("dash") || document.getElementById("dashboardSection");
+  if (loginBox) loginBox.style.display = show ? "none" : "block";
+  if (dashBox) dashBox.style.display = show ? "block" : "none";
+  if (show) loadStories();
 }
-function safe(v){return String(v||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-$('loginBtn').onclick=async()=>{try{const r=await api('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('password').value})});token=r.token;$('loginBox').classList.add('hidden');$('dashboard').classList.remove('hidden');await load()}catch(e){$('loginError').textContent='Login failed: '+e.message+' | API='+base;}};
-$('logoutBtn').onclick=async()=>{try{await api('/api/logout',{method:'POST',headers:headers()})}catch(e){}token='';$('dashboard').classList.add('hidden');$('loginBox').classList.remove('hidden')};
-$('storyForm').onsubmit=async e=>{e.preventDefault();try{const photo=$('photo').files[0],clip=$('video').files[0];if(photo&&photo.size>8*1024*1024)throw Error('Photo must be 8 MB or smaller.');if(clip&&clip.size>10*1024*1024)throw Error('Video must be 10 MB or smaller.');msg('Uploading and publishing…');const image=await fileData(photo),video=await fileData(clip);await api('/api/stories',{method:'POST',headers:headers(),body:JSON.stringify({title:$('title').value,category:$('category').value,country:$('country').value,date:$('date').value,story:$('story').value,image,video})});e.target.reset();await load();msg('Published! The story is now visible to all website visitors.')}catch(err){msg('Could not publish: '+err.message)}};
-})();
 
+function showMsg(id, msg, isError) {
+  const el = document.getElementById(id);
+  if (!el) { if (msg) alert(msg); return; }
+  el.style.display = msg ? "block" : "none";
+  el.textContent = msg || "";
+  el.style.color = isError ? "red" : "green";
+}
+
+// ===== LOGIN =====
+async function doLogin(e) {
+  if (e) e.preventDefault();
+  const passInput = document.getElementById("password") || document.getElementById("adminPass") || document.getElementById("pass");
+  const password = passInput ? passInput.value.trim() : "";
+  if (!password) { showMsg("loginError", "Password likho", true); return; }
+
+  showMsg("loginError", "Login ho raha hai... wait karo", false);
+
+  try {
+    const res = await fetch(API + "/api/login", {
+      method: "POST",
+      // IMPORTANT: text/plain is liye taake browser OPTIONS na bheje aur Failed to fetch na aaye
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({ password: password })
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      showMsg("loginError", "Login failed: " + (data.error || "wrong password"), true);
+      return;
+    }
+
+    token = data.token;
+    localStorage.setItem("vv_token", token);
+    showMsg("loginError", "", false);
+    showDashboard(true);
+  } catch (err) {
+    showMsg("loginError", "Login failed: Failed to fetch | API=" + API, true);
+  }
+}
+
+// ===== LOAD STORIES =====
+async function loadStories() {
+  const list = document.getElementById("storiesList") || document.getElementById("storyList") || document.getElementById("list");
+  if (!list) return;
+  list.innerHTML = "Loading...";
+  try {
+    const res = await fetch(API + "/api/stories");
+    const data = await res.json();
+    const stories = data.stories || [];
+    if (stories.length === 0) {
+      list.innerHTML = "<p>Abhi koi story nahi hai.</p>";
+      return;
+    }
+    list.innerHTML = "";
+    stories.forEach(s => {
+      const div = document.createElement("div");
+      div.style.border = "1px solid #ddd";
+      div.style.padding = "10px";
+      div.style.marginBottom = "10px";
+      div.style.borderRadius = "8px";
+      div.innerHTML = `
+        <b>${s.title || "No Title"}</b> - ${s.country || ""} - ${s.category || ""}<br>
+        <small>${s.date || ""} | ID: ${s.id}</small><br>
+        ${s.image ? `<img src="${s.image}" style="width:100px;height:70px;object-fit:cover;margin-top:5px;border-radius:6px;">` : ""}<br>
+        <button onclick="deleteStory('${s.id}')" style="margin-top:5px;background:red;color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;">Delete</button>
+      `;
+      list.appendChild(div);
+    });
+  } catch (e) {
+    list.innerHTML = "Load nahi hua: " + e.message;
+  }
+}
+
+// ===== ADD STORY =====
+async function addStory(e) {
+  if (e) e.preventDefault();
+  const get = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ""; };
+  const payload = {
+    title: get("title"),
+    category: get("category"),
+    country: get("country"),
+    date: get("date"),
+    story: get("story"),
+    image: get("image"),
+    video: get("video")
+  };
+  if (!payload.title) { alert("Title likho"); return; }
+
+  try {
+    const res = await fetch(API + "/api/stories", {
+      method: "POST",
+      headers: { "Content-Type": "text/plain", "Authorization": "Bearer " + token },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert("Save nahi hua: " + (data.error || "Please log in again"));
+      if (res.status === 401) { doLogout(); }
+      return;
+    }
+    alert("Story save ho gayi!");
+    const form = document.getElementById("storyForm") || document.getElementById("addForm");
+    if (form) form.reset();
+    loadStories();
+  } catch (err) {
+    alert("Save failed: Failed to fetch");
+  }
+}
+
+// ===== DELETE =====
+async function deleteStory(id) {
+  if (!confirm("Is story ko delete karna hai?")) return;
+  try {
+    const res = await fetch(API + "/api/stories/" + encodeURIComponent(id), {
+      method: "DELETE",
+      headers: { "Authorization": "Bearer " + token }
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { alert("Delete nahi hua: " + (data.error || "")); return; }
+    alert("Delete ho gayi");
+    loadStories();
+  } catch (e) {
+    alert("Delete failed: Failed to fetch");
+  }
+}
+
+// ===== LOGOUT =====
+function doLogout() {
+  token = "";
+  localStorage.removeItem("vv_token");
+  showDashboard(false);
+}
+
+// ===== CONNECT BUTTONS =====
+document.addEventListener("DOMContentLoaded", () => {
+  const loginForm = document.getElementById("loginForm");
+  if (loginForm) loginForm.addEventListener("submit", doLogin);
+  const loginBtn = document.getElementById("loginBtn");
+  if (loginBtn) loginBtn.addEventListener("click", doLogin);
+
+  const storyForm = document.getElementById("storyForm") || document.getElementById("addForm");
+  if (storyForm) storyForm.addEventListener("submit", addStory);
+  const saveBtn = document.getElementById("saveBtn") || document.getElementById("publishBtn");
+  if (saveBtn) saveBtn.addEventListener("click", addStory);
+
+  const logoutBtn = document.getElementById("logoutBtn");
+  if (logoutBtn) logoutBtn.addEventListener("click", doLogout);
+
+  if (token) showDashboard(true);
+  else showDashboard(false);
+});
