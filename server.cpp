@@ -103,6 +103,8 @@ int main() {
     ([](const crow::request& req) { crow::response res(204); add_cors(res, req); return res; });
     CROW_ROUTE(app, "/api/stories/<string>").methods("OPTIONS"_method)
     ([](const crow::request& req, std::string id) { crow::response res(204); add_cors(res, req); return res; });
+    CROW_ROUTE(app, "/api/delete").methods("OPTIONS"_method)
+    ([](const crow::request& req) { crow::response res(204); add_cors(res, req); return res; });
     CROW_ROUTE(app, "/api/<path>").methods("OPTIONS"_method)
     ([](const crow::request& req, std::string path) { crow::response res(204); add_cors(res, req); return res; });
 
@@ -155,6 +157,49 @@ int main() {
         std::string target = id;
         const char* qid = req.url_params.get("id");
         if (qid && std::string(qid).size()>0) target = std::string(qid);
+        std::string old = load_file();
+        auto j = crow::json::load(old);
+        if (!j || !j.has("stories")) { res.code=200; res.body="{\"ok\":true}"; return res; }
+        std::string out = "{\"stories\":[";
+        bool first = true;
+        bool found = false;
+        for (auto &st : j["stories"]) {
+            std::string sid = "";
+            try { if (st.has("id") && st["id"].t()==crow::json::type::String) sid = std::string(st["id"].s()); } catch(...) {}
+            if (sid == target) { found = true; continue; }
+            if (!first) out += ",";
+            first = false;
+            out += "{\"id\":\""+json_escape(sid)+"\"";
+            out += ",\"title\":\""+json_escape(get_str(st,"title"))+"\"";
+            out += ",\"category\":\""+json_escape(get_str(st,"category"))+"\"";
+            out += ",\"country\":\""+json_escape(get_str(st,"country"))+"\"";
+            out += ",\"date\":\""+json_escape(get_str(st,"date"))+"\"";
+            out += ",\"story\":\""+json_escape(get_str(st,"story"))+"\"";
+            out += ",\"image\":\""+json_escape(get_str(st,"image"))+"\"";
+            out += ",\"video\":\""+json_escape(get_str(st,"video"))+"\"}";
+        }
+        out += "]}";
+        save_file(out);
+        if (found) { res.code=200; res.body="{\"ok\":true,\"deleted\":true}"; }
+        else { res.code=200; res.body="{\"ok\":true,\"deleted\":false,\"msg\":\"id not found\"}"; }
+        return res;
+    });
+
+    // ===== NAYA ADD KIYA HUA - DELETE VIA POST =====
+    CROW_ROUTE(app, "/api/delete").methods("POST"_method)
+    ([](const crow::request& req) {
+        crow::response res; add_cors(res, req); res.set_header("Content-Type","application/json");
+        auto body = crow::json::load(req.body);
+        if (!body) { res.code=400; res.body="{\"error\":\"bad json\"}"; return res; }
+        std::string supplied = get_str(body, "token");
+        if (supplied.empty()) {
+            std::string header = req.get_header_value("Authorization");
+            if (header.size() > 7 && header.rfind("Bearer ", 0) == 0) supplied = header.substr(7);
+        }
+        bool ok = false;
+        { std::lock_guard<std::mutex> lock(sessionMutex); for (auto &s : sessions) if (s == supplied) ok = true; }
+        if (!ok) { res.code=401; res.body="{\"error\":\"Please log in again\"}"; return res; }
+        std::string target = get_str(body, "id");
         std::string old = load_file();
         auto j = crow::json::load(old);
         if (!j || !j.has("stories")) { res.code=200; res.body="{\"ok\":true}"; return res; }
