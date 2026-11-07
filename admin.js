@@ -43,7 +43,8 @@ async function load(){
   })
 }
 function safe(v){return String(v||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-$('loginBtn').onclick=async()=>{try{const r=await api('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('password').value})});token=r.token;$('loginBox').classList.add('hidden');$('dashboard').classList.remove('hidden');await load()}catch(e){$('loginError').textContent='Login failed. Check password and API URL.'}};
+$('loginBtn').onclick=async()=>{try{const r=await api('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('password').value})});token=r.token;$('loginBox').classList.add('hidden');$('dashboard').classList.remove('hidden');await load()}catch(e){$('loginError').textContent='Login failed: '+e.message+' | API='+base;}};
 $('logoutBtn').onclick=async()=>{try{await api('/api/logout',{method:'POST',headers:headers()})}catch(e){}token='';$('dashboard').classList.add('hidden');$('loginBox').classList.remove('hidden')};
 $('storyForm').onsubmit=async e=>{e.preventDefault();try{const photo=$('photo').files[0],clip=$('video').files[0];if(photo&&photo.size>8*1024*1024)throw Error('Photo must be 8 MB or smaller.');if(clip&&clip.size>10*1024*1024)throw Error('Video must be 10 MB or smaller.');msg('Uploading and publishing…');const image=await fileData(photo),video=await fileData(clip);await api('/api/stories',{method:'POST',headers:headers(),body:JSON.stringify({title:$('title').value,category:$('category').value,country:$('country').value,date:$('date').value,story:$('story').value,image,video})});e.target.reset();await load();msg('Published! The story is now visible to all website visitors.')}catch(err){msg('Could not publish: '+err.message)}};
 })();
+
