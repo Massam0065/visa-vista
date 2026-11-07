@@ -76,13 +76,18 @@ bool authorized(const crow::request& req) {
 }
 std::string make_token() { return "vv-" + std::to_string(std::rand()) + "-" + std::to_string(time(nullptr)); }
 
+// ===== CORS FIX - Ab har website se Login hoga =====
+void add_cors(crow::response& res, const crow::request& req) {
+    std::string origin = req.get_header_value("Origin");
+    if (origin.empty()) origin = "*";
+    res.set_header("Access-Control-Allow-Origin", origin);
+    res.set_header("Vary", "Origin");
+    res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.set_header("Access-Control-Max-Age", "86400");
+}
 void add_cors(crow::response& res) {
-    const char* origin = std::getenv("VV_ALLOWED_ORIGIN");
-    if (origin && std::string(origin).size() > 0) {
-        res.set_header("Access-Control-Allow-Origin", origin);
-    } else {
-        res.set_header("Access-Control-Allow-Origin", "*");
-    }
+    res.set_header("Access-Control-Allow-Origin", "*");
     res.set_header("Vary", "Origin");
     res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -93,21 +98,28 @@ int main() {
     std::srand((unsigned)time(nullptr));
     crow::SimpleApp app;
 
+    // OPTIONS - Har route ke liye alag se taake Browser block na kare
+    CROW_ROUTE(app, "/api/login").methods("OPTIONS"_method)
+    ([](const crow::request& req) { crow::response res(204); add_cors(res, req); return res; });
+    CROW_ROUTE(app, "/api/stories").methods("OPTIONS"_method)
+    ([](const crow::request& req) { crow::response res(204); add_cors(res, req); return res; });
+    CROW_ROUTE(app, "/api/stories/<string>").methods("OPTIONS"_method)
+    ([](const crow::request& req, std::string id) { crow::response res(204); add_cors(res, req); return res; });
     CROW_ROUTE(app, "/api/<path>").methods("OPTIONS"_method)
-    ([](const crow::request& req, std::string path) { crow::response res(204); add_cors(res); return res; });
+    ([](const crow::request& req, std::string path) { crow::response res(204); add_cors(res, req); return res; });
 
     CROW_ROUTE(app, "/").methods("GET"_method)
-    ([](const crow::request& req) { crow::response res("Visa Vista API Running"); add_cors(res); return res; });
+    ([](const crow::request& req) { crow::response res("Visa Vista API Running"); add_cors(res, req); return res; });
 
     CROW_ROUTE(app, "/api/health").methods("GET"_method)
-    ([](const crow::request& req) { crow::response res("{\"ok\":true}"); res.set_header("Content-Type","application/json"); add_cors(res); return res; });
+    ([](const crow::request& req) { crow::response res("{\"ok\":true}"); res.set_header("Content-Type","application/json"); add_cors(res, req); return res; });
 
     CROW_ROUTE(app, "/api/stories").methods("GET"_method)
-    ([](const crow::request& req) { crow::response res(load_file()); res.set_header("Content-Type","application/json"); add_cors(res); return res; });
+    ([](const crow::request& req) { crow::response res(load_file()); res.set_header("Content-Type","application/json"); add_cors(res, req); return res; });
 
     CROW_ROUTE(app, "/api/login").methods("POST"_method)
     ([](const crow::request& req) {
-        crow::response res; add_cors(res); res.set_header("Content-Type","application/json");
+        crow::response res; add_cors(res, req); res.set_header("Content-Type","application/json");
         auto body = crow::json::load(req.body);
         if (!body) { res.code=400; res.body="{\"error\":\"bad json\"}"; return res; }
         std::string pass = get_str(body, "password");
@@ -122,12 +134,11 @@ int main() {
 
     CROW_ROUTE(app, "/api/stories").methods("POST"_method)
     ([](const crow::request& req) {
-        crow::response res; add_cors(res); res.set_header("Content-Type","application/json");
+        crow::response res; add_cors(res, req); res.set_header("Content-Type","application/json");
         if (!authorized(req)) { res.code=401; res.body="{\"error\":\"Please log in again\"}"; return res; }
         auto body = crow::json::load(req.body);
         if (!body) { res.code=400; res.body="{\"error\":\"bad json\"}"; return res; }
         std::string id = std::to_string(time(nullptr)) + "-" + std::to_string(std::rand());
-        // image / video ko poora save karo, koi kat nahi
         std::string ns = "{\"id\":\""+id+"\",\"title\":\""+json_escape(get_str(body,"title"))+"\",\"category\":\""+json_escape(get_str(body,"category"))+"\",\"country\":\""+json_escape(get_str(body,"country"))+"\",\"date\":\""+json_escape(get_str(body,"date"))+"\",\"story\":\""+json_escape(get_str(body,"story"))+"\",\"image\":\""+json_escape(get_str(body,"image"))+"\",\"video\":\""+json_escape(get_str(body,"video"))+"\"}";
         std::string old = load_file(); std::string out;
         if (old=="{\"stories\":[]}") out="{\"stories\":["+ns+"]}";
@@ -139,31 +150,25 @@ int main() {
         save_file(out); res.code=200; res.body="{\"ok\":true,\"id\":\""+id+"\"}"; return res;
     });
 
-    // ===== FIXED DELETE - Ab asal me delete hoga =====
     CROW_ROUTE(app, "/api/stories/<string>").methods("DELETE"_method)
     ([](const crow::request& req, std::string id) {
-        crow::response res; add_cors(res); res.set_header("Content-Type","application/json");
+        crow::response res; add_cors(res, req); res.set_header("Content-Type","application/json");
         if (!authorized(req)) { res.code=401; res.body="{\"error\":\"Please log in again\"}"; return res; }
-        // URL se id saaf karo - %20 wagera
         std::string target = id;
-        // Agar id query me aaye to wahan se bhi lo
         const char* qid = req.url_params.get("id");
         if (qid && std::string(qid).size()>0) target = std::string(qid);
-
         std::string old = load_file();
         auto j = crow::json::load(old);
         if (!j || !j.has("stories")) { res.code=200; res.body="{\"ok\":true}"; return res; }
-
         std::string out = "{\"stories\":[";
         bool first = true;
         bool found = false;
         for (auto &st : j["stories"]) {
             std::string sid = "";
             try { if (st.has("id") && st["id"].t()==crow::json::type::String) sid = std::string(st["id"].s()); } catch(...) {}
-            if (sid == target) { found = true; continue; } // is wali ko chor do = delete
+            if (sid == target) { found = true; continue; }
             if (!first) out += ",";
             first = false;
-            // poori story wapis likho taake pic na toote
             out += "{\"id\":\""+json_escape(sid)+"\"";
             out += ",\"title\":\""+json_escape(get_str(st,"title"))+"\"";
             out += ",\"category\":\""+json_escape(get_str(st,"category"))+"\"";
