@@ -61,7 +61,6 @@ void addCors(crow::response& response) {
 
 crow::response jsonResponse(int status, crow::json::wvalue body) {
     crow::response response(std::move(body));
-
     response.code = status;
 
     response.set_header(
@@ -70,15 +69,12 @@ crow::response jsonResponse(int status, crow::json::wvalue body) {
     );
 
     addCors(response);
-
     return response;
 }
 
 crow::response textResponse(int status, const std::string& body) {
     crow::response response(status, body);
-
     addCors(response);
-
     return response;
 }
 
@@ -96,7 +92,6 @@ sqlite3* openDb() {
     }
 
     sqlite3_busy_timeout(database, 5000);
-
     return database;
 }
 
@@ -126,11 +121,7 @@ void initialize() {
     char* error = nullptr;
 
     const int result = sqlite3_exec(
-        database,
-        sql,
-        nullptr,
-        nullptr,
-        &error
+        database, sql, nullptr, nullptr, &error
     );
 
     std::string message =
@@ -155,9 +146,7 @@ bool authorized(const crow::request& request) {
     std::lock_guard<std::mutex> lock(sessionMutex);
 
     return std::find(
-        sessions.begin(),
-        sessions.end(),
-        supplied
+        sessions.begin(), sessions.end(), supplied
     ) != sessions.end();
 }
 
@@ -166,7 +155,6 @@ std::string base64Decode(const std::string& input) {
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     std::string output;
-
     int value = 0;
     int bits = -8;
 
@@ -186,7 +174,6 @@ std::string base64Decode(const std::string& input) {
             output.push_back(
                 static_cast<char>((value >> bits) & 0xff)
             );
-
             bits -= 8;
         }
     }
@@ -204,9 +191,7 @@ std::string saveDataUrl(
         dataUrl.substr(0, comma).find(";base64") == std::string::npos)
         return "";
 
-    const std::string header =
-        dataUrl.substr(0, comma);
-
+    const std::string header = dataUrl.substr(0, comma);
     std::string extension;
 
     if (isVideo)
@@ -229,10 +214,9 @@ std::string saveDataUrl(
     const std::string bytes =
         base64Decode(dataUrl.substr(comma + 1));
 
-    const size_t limit =
-        isVideo
-            ? 10u * 1024u * 1024u
-            : 8u * 1024u * 1024u;
+    const size_t limit = isVideo
+        ? 10u * 1024u * 1024u
+        : 8u * 1024u * 1024u;
 
     if (bytes.empty() || bytes.size() > limit)
         return "";
@@ -265,24 +249,17 @@ crow::json::wvalue storyFromRow(sqlite3_stmt* statement) {
     row["id"] = sqlite3_column_int(statement, 0);
 
     const char* keys[] = {
-        "title",
-        "category",
-        "country",
-        "date",
-        "story",
-        "image",
-        "video",
-        "created_at"
+        "title", "category", "country", "date",
+        "story", "image", "video", "created_at"
     };
 
     for (int i = 0; i < 8; ++i) {
         const auto* value =
             sqlite3_column_text(statement, i + 1);
 
-        row[keys[i]] =
-            value
-                ? reinterpret_cast<const char*>(value)
-                : "";
+        row[keys[i]] = value
+            ? reinterpret_cast<const char*>(value)
+            : "";
     }
 
     return row;
@@ -308,26 +285,19 @@ int main() {
     }
     catch (const std::exception& error) {
         std::cerr << "Startup error: "
-                  << error.what()
-                  << std::endl;
-
+                  << error.what() << std::endl;
         return 1;
     }
 
     crow::SimpleApp app;
-
-    app.max_payload(16 * 1024 * 1024);
 
     // OPTIONS ROUTE
 
     CROW_ROUTE(app, "/api/<path>")
     .methods("OPTIONS"_method)(
         [](const crow::request&, std::string) {
-
             crow::response response(204);
-
             addCors(response);
-
             return response;
         }
     );
@@ -336,12 +306,9 @@ int main() {
 
     CROW_ROUTE(app, "/api/health")
     .methods("GET"_method)([] {
-
         crow::json::wvalue body;
-
         body["ok"] = true;
         body["service"] = "visa-vista-api";
-
         return jsonResponse(200, body);
     });
 
@@ -350,15 +317,11 @@ int main() {
     CROW_ROUTE(app, "/api/login")
     .methods("POST"_method)(
         [](const crow::request& request) {
-
             const auto json =
                 crow::json::load(request.body);
 
             if (!json || !json.has("password"))
-                return textResponse(
-                    400,
-                    "Invalid login request"
-                );
+                return textResponse(400, "Invalid login request");
 
             const std::string expected =
                 env("VV_ADMIN_PASSWORD");
@@ -370,10 +333,7 @@ int main() {
                 );
 
             if (stringField(json, "password") != expected)
-                return textResponse(
-                    401,
-                    "Incorrect password"
-                );
+                return textResponse(401, "Incorrect password");
 
             const std::string session = randomToken();
 
@@ -383,7 +343,6 @@ int main() {
             }
 
             crow::json::wvalue body;
-
             body["token"] = session;
 
             return jsonResponse(200, body);
@@ -394,14 +353,10 @@ int main() {
 
     CROW_ROUTE(app, "/api/stories")
     .methods("GET"_method)([] {
-
         sqlite3* database = openDb();
 
         if (!database)
-            return textResponse(
-                500,
-                "Database unavailable"
-            );
+            return textResponse(500, "Database unavailable");
 
         sqlite3_stmt* statement = nullptr;
 
@@ -411,19 +366,10 @@ int main() {
             "FROM stories ORDER BY id DESC";
 
         if (sqlite3_prepare_v2(
-            database,
-            sql,
-            -1,
-            &statement,
-            nullptr
+            database, sql, -1, &statement, nullptr
         ) != SQLITE_OK) {
-
             sqlite3_close(database);
-
-            return textResponse(
-                500,
-                "Could not read stories"
-            );
+            return textResponse(500, "Could not read stories");
         }
 
         crow::json::wvalue::list stories;
@@ -435,7 +381,6 @@ int main() {
         sqlite3_close(database);
 
         crow::json::wvalue body;
-
         body["stories"] = std::move(stories);
 
         return jsonResponse(200, body);
@@ -446,21 +391,14 @@ int main() {
     CROW_ROUTE(app, "/api/stories")
     .methods("POST"_method)(
         [](const crow::request& request) {
-
             if (!authorized(request))
-                return textResponse(
-                    401,
-                    "Please log in again"
-                );
+                return textResponse(401, "Please log in again");
 
             const auto json =
                 crow::json::load(request.body);
 
             if (!json)
-                return textResponse(
-                    400,
-                    "Invalid story data"
-                );
+                return textResponse(400, "Invalid story data");
 
             std::string imageData =
                 stringField(json, "image");
@@ -470,11 +408,7 @@ int main() {
 
             if (imageData.size() > 12 * 1024 * 1024 ||
                 videoData.size() > 14 * 1024 * 1024)
-
-                return textResponse(
-                    413,
-                    "File is too large"
-                );
+                return textResponse(413, "File is too large");
 
             std::string imagePath;
             std::string videoPath;
@@ -502,10 +436,7 @@ int main() {
             sqlite3* database = openDb();
 
             if (!database)
-                return textResponse(
-                    500,
-                    "Database unavailable"
-                );
+                return textResponse(500, "Database unavailable");
 
             sqlite3_stmt* statement = nullptr;
 
@@ -515,15 +446,9 @@ int main() {
                 ") VALUES(?,?,?,?,?,?,?)";
 
             if (sqlite3_prepare_v2(
-                database,
-                sql,
-                -1,
-                &statement,
-                nullptr
+                database, sql, -1, &statement, nullptr
             ) != SQLITE_OK) {
-
                 sqlite3_close(database);
-
                 return textResponse(
                     500,
                     "Could not prepare story save"
@@ -568,26 +493,16 @@ int main() {
     CROW_ROUTE(app, "/api/stories/<int>")
     .methods("DELETE"_method)(
         [](const crow::request& request, int id) {
-
             if (!authorized(request))
-                return textResponse(
-                    401,
-                    "Please log in again"
-                );
+                return textResponse(401, "Please log in again");
 
             if (id <= 0)
-                return textResponse(
-                    400,
-                    "Invalid story ID"
-                );
+                return textResponse(400, "Invalid story ID");
 
             sqlite3* database = openDb();
 
             if (!database)
-                return textResponse(
-                    500,
-                    "Database unavailable"
-                );
+                return textResponse(500, "Database unavailable");
 
             sqlite3_stmt* statement = nullptr;
 
@@ -595,15 +510,9 @@ int main() {
                 "DELETE FROM stories WHERE id=?";
 
             if (sqlite3_prepare_v2(
-                database,
-                sql,
-                -1,
-                &statement,
-                nullptr
+                database, sql, -1, &statement, nullptr
             ) != SQLITE_OK) {
-
                 sqlite3_close(database);
-
                 return textResponse(
                     500,
                     "Could not prepare story deletion"
@@ -612,31 +521,19 @@ int main() {
 
             sqlite3_bind_int(statement, 1, id);
 
-            const int stepResult =
-                sqlite3_step(statement);
-
-            const int affectedRows =
-                sqlite3_changes(database);
+            const int stepResult = sqlite3_step(statement);
+            const int affectedRows = sqlite3_changes(database);
 
             sqlite3_finalize(statement);
             sqlite3_close(database);
 
             if (stepResult != SQLITE_DONE)
-                return textResponse(
-                    500,
-                    "Delete failed"
-                );
+                return textResponse(500, "Delete failed");
 
             if (affectedRows == 0)
-                return textResponse(
-                    404,
-                    "Story not found"
-                );
+                return textResponse(404, "Story not found");
 
-            return textResponse(
-                200,
-                "Deleted successfully"
-            );
+            return textResponse(200, "Deleted successfully");
         }
     );
 
@@ -645,11 +542,9 @@ int main() {
     CROW_ROUTE(app, "/uploads/<string>")
     .methods("GET"_method)(
         [](const crow::request&, std::string name) {
-
             if (name.find("..") != std::string::npos ||
                 name.find('/') != std::string::npos ||
                 name.find('\\') != std::string::npos)
-
                 return crow::response(403);
 
             std::ifstream file(
@@ -661,13 +556,11 @@ int main() {
                 return crow::response(404);
 
             std::ostringstream content;
-
             content << file.rdbuf();
 
             crow::response response(content.str());
 
             const auto dot = name.rfind('.');
-
             const std::string ext =
                 dot == std::string::npos
                     ? ""
@@ -675,16 +568,12 @@ int main() {
 
             if (ext == "png")
                 response.set_header("Content-Type", "image/png");
-
             else if (ext == "webp")
                 response.set_header("Content-Type", "image/webp");
-
             else if (ext == "mp4")
                 response.set_header("Content-Type", "video/mp4");
-
             else if (ext == "webm")
                 response.set_header("Content-Type", "video/webm");
-
             else
                 response.set_header("Content-Type", "image/jpeg");
 
@@ -702,16 +591,13 @@ int main() {
     CROW_ROUTE(app, "/api/logout")
     .methods("POST"_method)(
         [](const crow::request& request) {
-
             const std::string header =
                 request.get_header_value("Authorization");
 
             if (header.rfind("Bearer ", 0) == 0) {
-
                 std::lock_guard<std::mutex> lock(sessionMutex);
 
-                const std::string session =
-                    header.substr(7);
+                const std::string session = header.substr(7);
 
                 sessions.erase(
                     std::remove(
@@ -723,17 +609,13 @@ int main() {
                 );
             }
 
-            return textResponse(
-                200,
-                "Logged out"
-            );
+            return textResponse(200, "Logged out");
         }
     );
 
     // RENDER PORT
 
     const char* portValue = std::getenv("PORT");
-
     int port = 8080;
 
     if (portValue && *portValue) {
